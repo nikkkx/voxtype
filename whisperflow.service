@@ -1,0 +1,16 @@
+[Unit]
+Description=WhisperFlow Voice Typing Daemon
+After=pipewire.service sound.target graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/whisperflow/venv/bin/python3 %h/.local/share/whisperflow/whisperflow.py
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=XDG_CURRENT_DESKTOP=KDE
+
+[Install]
+WantedBy=graphical-session.target default.target

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=WhisperFlow
+Comment=Local Push-to-Talk Voice Typing
+Exec=/home/nikk/.local/bin/whisperflow
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;Accessibility;
+X-KDE-autostart-phase=2
