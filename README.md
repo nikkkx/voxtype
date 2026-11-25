@@ -1,8 +1,8 @@
-# 🎙️ WhisperFlow Arch
+# 🎙️ WhisperFlow (Cross-Platform)
 
-A lightweight, push-to-talk voice-to-text typing tool for **Arch Linux** (KDE Plasma / Wayland / X11), inspired by Wispr Flow.
+A lightweight, push-to-talk voice-to-text typing tool for **Linux (Arch, Ubuntu, Fedora, etc.)**, **Windows**, and **macOS**, inspired by Wispr Flow.
 
-It runs **100% locally** on your PC using [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper), capturing speech while you hold down a key (default: **Left Control**) and typing the transcribed text directly at your cursor the moment you release it.
+It runs **100% locally** on your PC using [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper), capturing speech while you hold down a key (default: **Right Alt**) and typing the transcribed text directly at your cursor the moment you release it.
 
 ---
 

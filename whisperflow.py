@@ -10,6 +10,7 @@ import re
 import time
 import json
 import wave
+import shutil
 import signal
 import select
 import socket
@@ -21,22 +22,49 @@ from typing import Optional, List, Dict, Any
 
 import numpy as np
 
+IS_LINUX = sys.platform.startswith("linux")
+IS_WINDOWS = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
+
 # Lazy imports for fast startup when querying status/toggle
 evdev = None
 ecodes = None
 WhisperModel = None
+pynput_keyboard = None
+sd = None
+pyperclip = None
 
 
 def ensure_imports():
-    global evdev, ecodes, WhisperModel
-    if evdev is None:
+    global evdev, ecodes, WhisperModel, pynput_keyboard, sd, pyperclip
+    if IS_LINUX and evdev is None:
         try:
             import evdev as _evdev
             from evdev import ecodes as _ecodes
             evdev = _evdev
             ecodes = _ecodes
         except ImportError:
-            sys.exit("[ERROR] Missing 'evdev'. Run: pip install evdev")
+            pass
+
+    if not IS_LINUX or evdev is None:
+        if pynput_keyboard is None:
+            try:
+                from pynput import keyboard as _pk
+                pynput_keyboard = _pk
+            except ImportError:
+                sys.exit("[ERROR] Missing 'pynput'. Run: pip install pynput")
+        if sd is None:
+            try:
+                import sounddevice as _sd
+                sd = _sd
+            except ImportError:
+                sys.exit("[ERROR] Missing 'sounddevice'. Run: pip install sounddevice")
+        if pyperclip is None:
+            try:
+                import pyperclip as _pc
+                pyperclip = _pc
+            except ImportError:
+                sys.exit("[ERROR] Missing 'pyperclip'. Run: pip install pyperclip")
 
     if WhisperModel is None:
         try:
@@ -123,114 +151,156 @@ class AudioFeedback:
         if not self.stop_sound.exists():
             self._generate_beep(self.stop_sound, freq=660, duration=0.04)   # Soft chime
 
-    def play_start(self):
+    def _play_file(self, path: Path):
         if not self.enabled:
             return
-        subprocess.Popen(
-            ["pw-play", str(self.start_sound)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+        try:
+            if IS_WINDOWS:
+                import winsound
+                winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC)
+            elif IS_MAC:
+                subprocess.Popen(["afplay", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif shutil.which("pw-play"):
+                subprocess.Popen(["pw-play", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif shutil.which("paplay"):
+                subprocess.Popen(["paplay", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    def play_start(self):
+        self._play_file(self.start_sound)
 
     def play_stop(self):
-        if not self.enabled:
-            return
-        subprocess.Popen(
-            ["pw-play", str(self.stop_sound)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+        self._play_file(self.stop_sound)
 
 
 class Notifier:
-    """Lightweight desktop notification using notify-send."""
+    """Lightweight cross-platform desktop notification."""
     def __init__(self, enabled: bool = True):
         self.enabled = enabled
 
     def notify(self, title: str, message: str, icon: str = "audio-input-microphone", timeout: int = 1500):
         if not self.enabled:
             return
-        subprocess.Popen([
-            "notify-send",
-            "-a", "WhisperFlow",
-            "-i", icon,
-            "-t", str(timeout),
-            "-h", "int:transient:1",
-            title,
-            message
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            if IS_LINUX and shutil.which("notify-send"):
+                subprocess.Popen([
+                    "notify-send",
+                    "-a", "WhisperFlow",
+                    "-i", icon,
+                    "-t", str(timeout),
+                    "-h", "int:transient:1",
+                    title,
+                    message
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif IS_MAC:
+                safe_msg = message.replace('"', '\\"')
+                safe_title = title.replace('"', '\\"')
+                subprocess.Popen([
+                    "osascript", "-e",
+                    f'display notification "{safe_msg}" with title "{safe_title}"'
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
 
 
 class AudioRecorder:
-    """Streams raw 16-bit PCM audio directly from PipeWire default microphone into memory."""
+    """Streams raw audio from PipeWire (Linux) or sounddevice (Windows/macOS/fallback)."""
     def __init__(self, sample_rate: int = 16000):
         self.sample_rate = sample_rate
         self.proc: Optional[subprocess.Popen] = None
         self._raw_data: bytearray = bytearray()
+        self._sd_chunks: List[np.ndarray] = []
+        self._sd_stream = None
         self._reader_thread: Optional[threading.Thread] = None
         self.recording = False
+        self.use_pw = IS_LINUX and shutil.which("pw-record") is not None
 
     def start(self):
         if self.recording:
             return
         self.recording = True
         self._raw_data = bytearray()
-        try:
+        self._sd_chunks = []
+
+        if self.use_pw:
             self.proc = subprocess.Popen(
                 ["pw-record", "--raw", "--target", "@DEFAULT_AUDIO_SRC@", f"--rate={self.sample_rate}", "--channels=1", "--format=s16", "-"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 bufsize=1024 * 16
             )
-        except FileNotFoundError:
-            self.proc = subprocess.Popen(
-                ["ffmpeg", "-f", "pulse", "-i", "default", "-ar", str(self.sample_rate), "-ac", "1", "-f", "s16le", "-"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL
+
+            def _reader():
+                while self.recording and self.proc and self.proc.stdout:
+                    chunk = self.proc.stdout.read(2048)
+                    if not chunk:
+                        break
+                    self._raw_data.extend(chunk)
+
+            self._reader_thread = threading.Thread(target=_reader, daemon=True)
+            self._reader_thread.start()
+        else:
+            ensure_imports()
+            def _callback(indata, frames, time_info, status):
+                if self.recording:
+                    self._sd_chunks.append(indata.copy())
+
+            self._sd_stream = sd.InputStream(
+                samplerate=self.sample_rate,
+                channels=1,
+                dtype="float32",
+                callback=_callback
             )
-
-        def _reader():
-            while self.recording and self.proc and self.proc.stdout:
-                chunk = self.proc.stdout.read(2048)
-                if not chunk:
-                    break
-                self._raw_data.extend(chunk)
-
-        self._reader_thread = threading.Thread(target=_reader, daemon=True)
-        self._reader_thread.start()
+            self._sd_stream.start()
 
     def stop(self) -> Optional[np.ndarray]:
         if not self.recording:
             return None
         self.recording = False
-        if self.proc:
-            try:
-                self.proc.terminate()
-                self.proc.wait(timeout=0.3)
-            except Exception:
+
+        if self.use_pw:
+            if self.proc:
                 try:
-                    self.proc.kill()
+                    self.proc.terminate()
+                    self.proc.wait(timeout=0.3)
+                except Exception:
+                    try:
+                        self.proc.kill()
+                    except Exception:
+                        pass
+                if self.proc.stdout:
+                    try:
+                        remaining = self.proc.stdout.read()
+                        if remaining:
+                            self._raw_data.extend(remaining)
+                    except Exception:
+                        pass
+                self.proc = None
+
+            if self._reader_thread:
+                self._reader_thread.join(timeout=0.3)
+                self._reader_thread = None
+
+            if len(self._raw_data) < 1600:
+                return None
+
+            pcm16 = np.frombuffer(self._raw_data, dtype="<i2")
+            return pcm16.astype(np.float32) / 32768.0
+        else:
+            if self._sd_stream:
+                try:
+                    self._sd_stream.stop()
+                    self._sd_stream.close()
                 except Exception:
                     pass
-            if self.proc.stdout:
-                try:
-                    remaining = self.proc.stdout.read()
-                    if remaining:
-                        self._raw_data.extend(remaining)
-                except Exception:
-                    pass
-            self.proc = None
-
-        if self._reader_thread:
-            self._reader_thread.join(timeout=0.3)
-            self._reader_thread = None
-
-        if len(self._raw_data) < 1600:
-            return None
-
-        pcm16 = np.frombuffer(self._raw_data, dtype="<i2")
-        audio_float = pcm16.astype(np.float32) / 32768.0
-        return audio_float
+                self._sd_stream = None
+            if not self._sd_chunks:
+                return None
+            audio = np.concatenate(self._sd_chunks, axis=0).flatten()
+            if len(audio) < 800:
+                return None
+            return audio
 
     def cancel(self):
         self.recording = False
@@ -240,19 +310,34 @@ class AudioRecorder:
             except Exception:
                 pass
             self.proc = None
+        if self._sd_stream:
+            try:
+                self._sd_stream.stop()
+                self._sd_stream.close()
+            except Exception:
+                pass
+            self._sd_stream = None
         self._raw_data = bytearray()
+        self._sd_chunks = []
 
 
 class TextTyper:
-    """Types or pastes text into the currently active window on Wayland/X11."""
+    """Types or pastes text into the currently active window across Linux, Windows, and macOS."""
     def __init__(self, restore_clipboard: bool = False, paste_delay: float = 0.08):
         ensure_imports()
         self.restore_clipboard = restore_clipboard
         self.paste_delay = paste_delay
         self.ui = None
-        self._init_uinput()
+        self.kbd = None
+        self.use_uinput = IS_LINUX and evdev is not None and shutil.which("wl-copy") is not None
+        if self.use_uinput:
+            self._init_uinput()
+        else:
+            self.kbd = pynput_keyboard.Controller()
 
     def _init_uinput(self) -> bool:
+        if not self.use_uinput:
+            return False
         if self.ui is not None:
             return True
         try:
@@ -280,8 +365,26 @@ class TextTyper:
             self.ui = None
             return False
 
+    def emit_action(self, action: str):
+        """Simulates common editor shortcuts ('select_all', 'undo', 'copy') cross-platform."""
+        if self.use_uinput:
+            key_map = {
+                "select_all": ecodes.KEY_A,
+                "undo": ecodes.KEY_Z,
+                "copy": ecodes.KEY_C,
+            }
+            if action in key_map:
+                self.emit_combo(ecodes.KEY_LEFTCTRL, key_map[action])
+        elif self.kbd:
+            mod = pynput_keyboard.Key.cmd if IS_MAC else pynput_keyboard.Key.ctrl
+            char_map = {"select_all": "a", "undo": "z", "copy": "c"}
+            if action in char_map:
+                with self.kbd.pressed(mod):
+                    self.kbd.press(char_map[action])
+                    self.kbd.release(char_map[action])
+
     def emit_combo(self, *key_codes):
-        """Simulates pressing and releasing a key combination (e.g. Ctrl+Z, Ctrl+A)."""
+        """Simulates pressing and releasing a key combination (Linux uinput)."""
         if self.ui is None:
             self._init_uinput()
         if self.ui:
@@ -302,66 +405,70 @@ class TextTyper:
         if not text:
             return
 
-        # 1. Ensure virtual keyboard is initialized
-        if self.ui is None:
-            self._init_uinput()
+        if self.use_uinput:
+            if self.ui is None:
+                self._init_uinput()
 
-        # 2. Put transcribed text into Wayland clipboard cleanly
-        try:
-            p = subprocess.Popen(
-                ["wl-copy"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            p.stdin.write(text.encode("utf-8"))
-            p.stdin.close()
-        except Exception as e:
-            print(f"[ERROR] Failed to copy to clipboard: {e}")
-            return
+            try:
+                p = subprocess.Popen(
+                    ["wl-copy"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                p.stdin.write(text.encode("utf-8"))
+                p.stdin.close()
+            except Exception as e:
+                print(f"[ERROR] Failed to copy to clipboard: {e}")
+                return
 
-        time.sleep(self.paste_delay)
+            time.sleep(self.paste_delay)
 
-        # 3. Emit Ctrl+V keystroke via virtual keyboard
-        if self.ui:
-            # Clear any stuck modifier keys
-            self.ui.write(ecodes.EV_KEY, ecodes.KEY_RIGHTALT, 0)
-            self.ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTALT, 0)
-            self.ui.syn()
-            time.sleep(0.01)
+            if self.ui:
+                self.ui.write(ecodes.EV_KEY, ecodes.KEY_RIGHTALT, 0)
+                self.ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTALT, 0)
+                self.ui.syn()
+                time.sleep(0.01)
 
-            # Send Ctrl+V
-            self.ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 1)
-            self.ui.write(ecodes.EV_KEY, ecodes.KEY_V, 1)
-            self.ui.syn()
-            time.sleep(0.03)
-            self.ui.write(ecodes.EV_KEY, ecodes.KEY_V, 0)
-            self.ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 0)
-            self.ui.syn()
+                self.ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 1)
+                self.ui.write(ecodes.EV_KEY, ecodes.KEY_V, 1)
+                self.ui.syn()
+                time.sleep(0.03)
+                self.ui.write(ecodes.EV_KEY, ecodes.KEY_V, 0)
+                self.ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 0)
+                self.ui.syn()
 
-            # If auto_submit is requested, emit Enter key
+                if auto_submit:
+                    time.sleep(0.05)
+                    self.ui.write(ecodes.EV_KEY, ecodes.KEY_ENTER, 1)
+                    self.ui.syn()
+                    time.sleep(0.02)
+                    self.ui.write(ecodes.EV_KEY, ecodes.KEY_ENTER, 0)
+                    self.ui.syn()
+            else:
+                print("\n[ERROR] Cannot type text because /dev/uinput is not accessible!")
+                subprocess.Popen([
+                    "notify-send", "-a", "WhisperFlow", "-i", "dialog-error", "-t", "4000",
+                    "WhisperFlow Error", "Cannot type: /dev/uinput permission needed!\nRun: sudo setfacl -m u:$USER:rw /dev/uinput"
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            # Windows / macOS / X11 fallback via pyperclip + pynput
+            try:
+                pyperclip.copy(text)
+            except Exception as e:
+                print(f"[ERROR] Clipboard copy failed: {e}")
+                return
+
+            time.sleep(self.paste_delay)
+            mod = pynput_keyboard.Key.cmd if IS_MAC else pynput_keyboard.Key.ctrl
+            with self.kbd.pressed(mod):
+                self.kbd.press("v")
+                self.kbd.release("v")
+
             if auto_submit:
                 time.sleep(0.05)
-                self.ui.write(ecodes.EV_KEY, ecodes.KEY_ENTER, 1)
-                self.ui.syn()
-                time.sleep(0.02)
-                self.ui.write(ecodes.EV_KEY, ecodes.KEY_ENTER, 0)
-                self.ui.syn()
-        else:
-            user = os.environ.get("USER", "user")
-            print("\n" + "=" * 60)
-            print("[ERROR] Cannot type text because /dev/uinput is not accessible!")
-            print(f"Fix this immediately by running:")
-            print(f"    sudo setfacl -m u:{user}:rw /dev/uinput")
-            print("=" * 60 + "\n")
-            subprocess.Popen([
-                "notify-send",
-                "-a", "WhisperFlow",
-                "-i", "dialog-error",
-                "-t", "4000",
-                "WhisperFlow Error",
-                "Cannot type: /dev/uinput permission needed!\nRun: sudo setfacl -m u:$USER:rw /dev/uinput"
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.kbd.press(pynput_keyboard.Key.enter)
+                self.kbd.release(pynput_keyboard.Key.enter)
 
     def close(self):
         if self.ui:
@@ -522,6 +629,73 @@ class InputMonitor:
         self.running = False
 
 
+class PynputInputMonitor:
+    """Cross-platform keyboard monitor using pynput (Windows, macOS, Linux X11)."""
+    def __init__(self, key_name: Any, on_press, on_release, on_cancel):
+        ensure_imports()
+        self.key_name = key_name
+        self.on_press = on_press
+        self.on_release = on_release
+        self.on_cancel = on_cancel
+        self.is_holding = False
+        self.combo_detected = False
+        self.press_time = 0.0
+        self.listener = None
+        self.target_keys = self._resolve_keys(key_name)
+
+    def _resolve_keys(self, key_name: Any) -> set:
+        K = pynput_keyboard.Key
+        mapping = {
+            "KEY_RIGHTALT": [K.alt_r, getattr(K, "alt_gr", K.alt_r)],
+            "KEY_LEFTALT": [K.alt_l],
+            "KEY_RIGHTCTRL": [K.ctrl_r],
+            "KEY_LEFTCTRL": [K.ctrl_l],
+            "KEY_CAPSLOCK": [K.caps_lock],
+            "KEY_F8": [K.f8],
+            "KEY_F9": [K.f9],
+        }
+        names = key_name if isinstance(key_name, list) else [str(key_name)]
+        keys = set()
+        for n in names:
+            if n in mapping:
+                keys.update(mapping[n])
+        if not keys:
+            keys.add(K.alt_r)
+        return keys
+
+    def init_devices(self) -> bool:
+        return True
+
+    def run(self):
+        def _on_press(key):
+            if key in self.target_keys:
+                if not self.is_holding:
+                    self.is_holding = True
+                    self.combo_detected = False
+                    self.press_time = time.time()
+                    self.on_press()
+            elif self.is_holding:
+                self.combo_detected = True
+                self.on_cancel()
+
+        def _on_release(key):
+            if key in self.target_keys and self.is_holding:
+                self.is_holding = False
+                if not self.combo_detected:
+                    self.on_release(time.time() - self.press_time)
+                else:
+                    self.combo_detected = False
+
+        with pynput_keyboard.Listener(on_press=_on_press, on_release=_on_release) as listener:
+            self.listener = listener
+            listener.join()
+        return True
+
+    def stop(self):
+        if self.listener:
+            self.listener.stop()
+
+
 class TextFormatter:
     """Handles voice punctuation formatting and custom snippet replacements."""
     def __init__(self, voice_punctuation: bool = True, snippets: Optional[Dict[str, str]] = None):
@@ -673,7 +847,8 @@ class App:
             snippets=config.get("snippets", {})
         )
         self.tray = TrayIconManager(enabled=config.get("tray_icon", True))
-        self.monitor = InputMonitor(
+        MonitorCls = InputMonitor if (IS_LINUX and evdev is not None) else PynputInputMonitor
+        self.monitor = MonitorCls(
             key_name=config.get("key", "KEY_RIGHTALT"),
             on_press=self.on_key_down,
             on_release=self.on_key_up,
@@ -691,10 +866,14 @@ class App:
                 return
             self.is_recording = True
             # Snapshot current clipboard so voice paste commands can use it
+            self.last_clipboard = ""
             try:
-                res = subprocess.run(["wl-paste", "--no-newline"], capture_output=True, text=True, timeout=0.2)
-                if res.returncode == 0:
-                    self.last_clipboard = res.stdout
+                if IS_LINUX and shutil.which("wl-paste"):
+                    res = subprocess.run(["wl-paste", "--no-newline"], capture_output=True, text=True, timeout=0.2)
+                    if res.returncode == 0:
+                        self.last_clipboard = res.stdout
+                elif pyperclip is not None:
+                    self.last_clipboard = pyperclip.paste() or ""
             except Exception:
                 self.last_clipboard = ""
 
@@ -730,16 +909,16 @@ class App:
         # 1. Check for quick voice editor actions
         clean_cmd = re.sub(r'^[^\w]+|[^\w]+$', '', raw_text).lower()
         if clean_cmd in ("select all", "select everything"):
-            self.typer.emit_combo(ecodes.KEY_LEFTCTRL, ecodes.KEY_A)
-            self.notifier.notify("WhisperFlow", "⚡ Selected All (Ctrl+A)", timeout=1500)
+            self.typer.emit_action("select_all")
+            self.notifier.notify("WhisperFlow", "⚡ Selected All", timeout=1500)
             return
         if clean_cmd in ("undo", "undo that", "undo this"):
-            self.typer.emit_combo(ecodes.KEY_LEFTCTRL, ecodes.KEY_Z)
-            self.notifier.notify("WhisperFlow", "⚡ Undo (Ctrl+Z)", timeout=1500)
+            self.typer.emit_action("undo")
+            self.notifier.notify("WhisperFlow", "⚡ Undo", timeout=1500)
             return
         if clean_cmd in ("copy that", "copy this", "copy it"):
-            self.typer.emit_combo(ecodes.KEY_LEFTCTRL, ecodes.KEY_C)
-            self.notifier.notify("WhisperFlow", "⚡ Copied (Ctrl+C)", timeout=1500)
+            self.typer.emit_action("copy")
+            self.notifier.notify("WhisperFlow", "⚡ Copied", timeout=1500)
             return
 
         # 2. Format with voice punctuation, snippets, and clipboard injection

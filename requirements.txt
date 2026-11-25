@@ -1,0 +1,8 @@
+faster-whisper
+numpy
+pystray
+pillow
+evdev; sys_platform == 'linux'
+pynput
+sounddevice
+pyperclip
