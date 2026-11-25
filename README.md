@@ -1,4 +1,4 @@
-# 🎙️ VoiceType
+# 🎙️ VoxType
 
 A fast, lightweight, **100% local** push-to-talk voice-to-text typing tool for **Linux**, **Windows**, and **macOS**.
 
@@ -35,8 +35,8 @@ Powered by [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper) — hol
 
 ### 2. Clone & Install
 ```bash
-git clone https://github.com/nikkkx/voice-type.git
-cd voice-type
+git clone https://github.com/nikkkx/voxtype.git
+cd voxtype
 ./install.sh
 ```
 
@@ -64,8 +64,8 @@ whisperflow --kill       # Stop
 ### 2. Clone & Install
 Open **PowerShell** and run:
 ```powershell
-git clone https://github.com/nikkkx/voice-type.git
-cd voice-type
+git clone https://github.com/nikkkx/voxtype.git
+cd voxtype
 .\install.ps1
 ```
 
@@ -87,8 +87,8 @@ Hold **Right Alt** anywhere, speak, and release to type!
 
 ### 2. Clone & Install
 ```bash
-git clone https://github.com/nikkkx/voice-type.git
-cd voice-type
+git clone https://github.com/nikkkx/voxtype.git
+cd voxtype
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
