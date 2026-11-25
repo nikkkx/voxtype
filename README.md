@@ -1,98 +1,116 @@
-# 🎙️ WhisperFlow (Cross-Platform)
+# 🎙️ VoiceType
 
-A lightweight, push-to-talk voice-to-text typing tool for **Linux (Arch, Ubuntu, Fedora, etc.)**, **Windows**, and **macOS**, inspired by Wispr Flow.
+A fast, lightweight, **100% local** push-to-talk voice-to-text typing tool for **Linux**, **Windows**, and **macOS**.
 
-It runs **100% locally** on your PC using [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper), capturing speech while you hold down a key (default: **Right Alt**) and typing the transcribed text directly at your cursor the moment you release it.
+Powered by [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper) — hold down a key (default: **Right Alt**), speak, and release to type directly at your cursor in any app (browsers, Discord, VS Code, terminals, docs, etc.).
 
 ---
 
 ## ✨ Features
 
-- **Push-to-Talk (Hold-to-Talk)**: Hold down **Right Alt** (near the spacebar/arrow keys) to speak, release to type.
-- **Voice Punctuation & Newlines**: Say *"comma"*, *"period"*, *"question mark"*, or *"new line"* and it formats cleanly.
-- **Voice Clipboard & Actions**: Say *"paste it"* to paste copied text, *"undo"* for `Ctrl+Z`, *"select all"* for `Ctrl+A`.
-- **Custom Snippets**: Define custom triggers like saying *"my email"* to insert your actual email address.
-- **KDE System Tray Icon**: Sleek mic icon in your KDE panel (blue when ready, glowing red when recording).
-- **Smart Shortcut Passthrough**: Preserves standard shortcuts (e.g., `Ctrl+C`, `Ctrl+V`, `Ctrl+Tab`).
-- **100% Local & Fast**: Runs `faster-whisper` with `int8` quantization on your CPU (typically 100–300ms for short sentences). Zero external cloud dependencies.
-- **Wayland & X11 Native**: Uses `wl-copy` + `evdev.UInput` for instant UTF-8 pasting.
-- **Auto-Submit Option**: Configurable option to automatically press `Enter` after typing (ideal for chat apps and AI prompts).
-- **Subtle Audio & Visual Feedback**: Plays gentle start/stop chimes and displays non-intrusive desktop notifications (`notify-send`).
-- **Daemon / Global Shortcut Support**: Includes a Unix socket for remote triggering (`whisperflow --toggle`) to bind with KDE global shortcuts.
-- **Background Systemd Service**: Easily run as a persistent background user service on login.
+- **Push-to-Talk (Hold-to-Talk)**: Hold **Right Alt** to speak, release to type.
+- **100% Local & Private**: Runs `faster-whisper` locally on your CPU (`int8` quantization) — no cloud APIs, no subscriptions.
+- **Voice Punctuation & Newlines**: Say *"comma"*, *"period"*, *"question mark"*, or *"new line"* and it formats automatically.
+- **Voice Clipboard & Quick Actions**: Say *"paste it"* to paste copied text, *"undo"* for `Ctrl+Z`, *"select all"* for `Ctrl+A`, *"copy that"* for `Ctrl+C`.
+- **Custom Snippets**: Define voice shortcuts in `config.json` (e.g., say *"my email"* $\rightarrow$ types your email).
+- **System Tray Icon**: Blue mic when ready, glowing red mic while recording.
 
 ---
 
-## 🚀 Quick Install
+## 🐧 Linux Setup (Arch, Ubuntu, Debian, Fedora)
 
-### 1. Requirements Check
-The following are standard on modern Arch Linux:
-- `python`
-- `pipewire` (for `pw-record` and `pw-play`)
-- `wl-clipboard` (for `wl-copy` and `wl-paste`)
-- `libnotify` (for `notify-send`)
+### 1. Install System Dependencies
+- **Arch Linux**:
+  ```bash
+  sudo pacman -S python pipewire wl-clipboard libnotify
+  ```
+- **Ubuntu / Debian**:
+  ```bash
+  sudo apt install python3 python3-venv pipewire wl-clipboard libnotify-bin
+  ```
+- **Fedora**:
+  ```bash
+  sudo dnf install python3 pipewire wl-clipboard libnotify
+  ```
 
-If any are missing:
+### 2. Clone & Install
 ```bash
-sudo pacman -S python pipewire wl-clipboard libnotify
-```
-
-### 2. Run the Installer
-```bash
-cd ~/.gemini/antigravity/scratch/whisperflow-arch
+git clone https://github.com/nikkkx/voice-type.git
+cd voice-type
 ./install.sh
 ```
 
-The installer:
-- Creates a dedicated virtual environment in `~/.local/share/whisperflow/venv`
-- Installs `faster-whisper`, `evdev`, and `numpy`
-- Installs the `whisperflow` command into `~/.local/bin/whisperflow`
-- Creates default configuration in `~/.config/whisperflow/config.json`
-- Sets up systemd user service `~/.config/systemd/user/whisperflow.service`
-
-### 3. Grant Input Permissions (Arch Linux)
-To allow reading the keyboard globally without root:
+### 3. Grant Input Permissions (Required once for global hotkey & typing)
 ```bash
 sudo usermod -aG input $USER
+sudo setfacl -m u:$USER:rw /dev/input/event* /dev/uinput
 ```
-> **Note:** Apply the new group without logging out by running `newgrp input` in your terminal.
+*(To persist across reboots, add udev rules for `input` and `uinput`.)*
+
+### 4. Run
+```bash
+whisperflow --daemon     # Run in background
+whisperflow --status     # Check status
+whisperflow --kill       # Stop
+```
 
 ---
 
-## 🛠️ Usage
+## 🪟 Windows Setup (Windows 10 / 11)
 
-### Test Microphone and Model
-Verify your microphone and transcription in 3 seconds:
-```bash
-whisperflow --test-mic
+### 1. Prerequisites
+- Install **Python 3.10+** from [python.org](https://www.python.org/downloads/) (check **"Add Python to PATH"** during install).
+
+### 2. Clone & Install
+Open **PowerShell** and run:
+```powershell
+git clone https://github.com/nikkkx/voice-type.git
+cd voice-type
+.\install.ps1
 ```
 
-### Run in Terminal
-```bash
-whisperflow
+### 3. Run
+```powershell
+& "$env:LOCALAPPDATA\whisperflow\venv\Scripts\python.exe" "$env:LOCALAPPDATA\whisperflow\whisperflow.py"
 ```
-Now switch to any app (browser, text editor, terminal, chat), hold **Left Control**, speak, and release!
+Hold **Right Alt** anywhere, speak, and release to type!
 
-### Run as a Background Service
-To have WhisperFlow start automatically on login:
+---
+
+## 🍎 macOS Setup
+
+### 1. Prerequisites
+- Install **Python 3.10+** and **PortAudio** (for `sounddevice`):
+  ```bash
+  brew install python portaudio
+  ```
+
+### 2. Clone & Install
 ```bash
-systemctl --user enable --now whisperflow
+git clone https://github.com/nikkkx/voice-type.git
+cd voice-type
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
-To view logs or stop:
+
+### 3. Grant Permissions
+On first run, macOS will ask for **Microphone** and **Accessibility** permissions (needed to detect global keys and paste with `Cmd+V`). Allow both in **System Settings → Privacy & Security**.
+
+### 4. Run
 ```bash
-journalctl --user -u whisperflow -f
-systemctl --user stop whisperflow
+python3 whisperflow.py
 ```
 
 ---
 
 ## ⚙️ Configuration
 
-Settings are saved in `~/.config/whisperflow/config.json`:
+Settings are stored in `~/.config/whisperflow/config.json`:
 
 ```json
 {
-  "key": "KEY_LEFTCTRL",
+  "key": "KEY_RIGHTALT",
   "model": "base.en",
   "device": "cpu",
   "compute_type": "int8",
@@ -100,60 +118,11 @@ Settings are saved in `~/.config/whisperflow/config.json`:
   "auto_submit": false,
   "sound_feedback": true,
   "notifications": true,
-  "min_hold_seconds": 0.25,
-  "paste_delay": 0.05,
-  "restore_clipboard": true
+  "voice_punctuation": true,
+  "tray_icon": true,
+  "snippets": {
+    "my email": "user@example.com",
+    "my github": "https://github.com/username"
+  }
 }
 ```
-
-### Options Breakdown:
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `key` | `"KEY_LEFTCTRL"` | Push-to-talk trigger key (e.g., `KEY_RIGHTCTRL`, `KEY_LEFTALT`, `KEY_CAPSLOCK`, `KEY_F8`). |
-| `model` | `"base.en"` | Faster-whisper model: `tiny.en` (ultra-fast), `base.en` (balanced), `small.en` (high accuracy), or multilingual `base`/`small`. |
-| `device` | `"cpu"` | `cpu` or `cuda` (if NVIDIA GPU driver is configured). |
-| `compute_type` | `"int8"` | `int8` for CPU, `float16` for CUDA. |
-| `language` | `"en"` | Language code (`en`, `auto`, `de`, `es`, `fr`, etc.). |
-| `auto_submit` | `false` | When `true`, automatically presses `Enter` after typing. |
-| `sound_feedback`| `true` | Plays short soft chimes when recording starts and stops. |
-| `notifications` | `true` | Shows transient desktop notification banners. |
-| `min_hold_seconds` | `0.25` | Minimum hold time to prevent accidental quick taps from triggering dictation. |
-
----
-
-## ⌨️ Changing the Push-to-Talk Key
-
-To see available key names:
-```bash
-whisperflow --list-keys
-```
-
-Popular keys:
-- `KEY_LEFTCTRL` (Left Control, default)
-- `KEY_RIGHTCTRL` (Right Control)
-- `KEY_LEFTALT` (Left Alt)
-- `KEY_RIGHTALT` (Right Alt / AltGr)
-- `KEY_CAPSLOCK` (Caps Lock)
-- `KEY_F8` / `KEY_F9` (Function keys)
-- `KEY_GRAVE` (Tilde / Backtick `` ` ``)
-
-You can pass `--key <KEY>` on the command line or set `"key"` in `config.json`:
-```bash
-whisperflow --key KEY_RIGHTCTRL
-```
-
----
-
-## ⚡ CLI Flags
-
-| Flag | Description |
-| :--- | :--- |
-| `--key KEY` | Override trigger key for this session |
-| `--model MODEL` | Choose model (`tiny.en`, `base.en`, `small.en`) |
-| `--submit` | Press Enter after typing |
-| `--no-submit` | Do not press Enter after typing |
-| `--no-sound` | Mute audio chimes |
-| `--toggle` | Toggle recording on running daemon |
-| `--test-mic` | 3-second test of microphone & transcription |
-| `--list-keys` | Show common key names |
-| `--status` | Show daemon status |
