@@ -712,13 +712,13 @@ class TextFormatter:
             if clean in ('paste it', 'paste that', 'paste', 'paste clipboard', 'paste here'):
                 return clipboard
             paste_pattern = re.compile(r'\b(paste it|paste that|paste clipboard|paste here)\b', re.IGNORECASE)
-            text = paste_pattern.sub(clipboard, text)
+            text = paste_pattern.sub(lambda m: clipboard, text)
 
         # 2. Custom Snippet replacements (case-insensitive, longest phrase first)
         sorted_snippets = sorted(self.snippets.items(), key=lambda x: len(x[0]), reverse=True)
         for phrase, replacement in sorted_snippets:
             pattern = re.compile(rf'\b{re.escape(phrase)}\b', re.IGNORECASE)
-            text = pattern.sub(replacement, text)
+            text = pattern.sub(lambda m, r=replacement: r, text)
 
         # 2. Voice Punctuation rules
         if self.voice_punctuation:
@@ -904,34 +904,38 @@ class App:
         rms = float(np.sqrt(np.mean(audio**2)))
         print(f"[*] Transcribing {len(audio)/16000:.1f}s of audio (RMS: {rms:.3f})...")
         t0 = time.time()
-        raw_text = self.transcriber.transcribe(audio)
+        try:
+            raw_text = self.transcriber.transcribe(audio)
 
-        # 1. Check for quick voice editor actions
-        clean_cmd = re.sub(r'^[^\w]+|[^\w]+$', '', raw_text).lower()
-        if clean_cmd in ("select all", "select everything"):
-            self.typer.emit_action("select_all")
-            self.notifier.notify("WhisperFlow", "⚡ Selected All", timeout=1500)
-            return
-        if clean_cmd in ("undo", "undo that", "undo this"):
-            self.typer.emit_action("undo")
-            self.notifier.notify("WhisperFlow", "⚡ Undo", timeout=1500)
-            return
-        if clean_cmd in ("copy that", "copy this", "copy it"):
-            self.typer.emit_action("copy")
-            self.notifier.notify("WhisperFlow", "⚡ Copied", timeout=1500)
-            return
+            # 1. Check for quick voice editor actions
+            clean_cmd = re.sub(r'^[^\w]+|[^\w]+$', '', raw_text).lower()
+            if clean_cmd in ("select all", "select everything"):
+                self.typer.emit_action("select_all")
+                self.notifier.notify("WhisperFlow", "⚡ Selected All", timeout=1500)
+                return
+            if clean_cmd in ("undo", "undo that", "undo this"):
+                self.typer.emit_action("undo")
+                self.notifier.notify("WhisperFlow", "⚡ Undo", timeout=1500)
+                return
+            if clean_cmd in ("copy that", "copy this", "copy it"):
+                self.typer.emit_action("copy")
+                self.notifier.notify("WhisperFlow", "⚡ Copied", timeout=1500)
+                return
 
-        # 2. Format with voice punctuation, snippets, and clipboard injection
-        text = self.formatter.format(raw_text, clipboard=self.last_clipboard)
-        dt = time.time() - t0
+            # 2. Format with voice punctuation, snippets, and clipboard injection
+            text = self.formatter.format(raw_text, clipboard=self.last_clipboard)
+            dt = time.time() - t0
 
-        if text:
-            print(f"[✓] ({dt:.2f}s) Transcribed: \"{text}\"")
-            self.typer.paste_text(text, auto_submit=self.auto_submit)
-            self.notifier.notify("WhisperFlow", f"✍️ {text}", icon="input-keyboard", timeout=2500)
-        else:
-            print("[*] No speech recognized.")
-            self.notifier.notify("WhisperFlow", "❌ No speech heard", icon="dialog-warning", timeout=1500)
+            if text:
+                print(f"[✓] ({dt:.2f}s) Transcribed: \"{text}\"")
+                self.typer.paste_text(text, auto_submit=self.auto_submit)
+                self.notifier.notify("WhisperFlow", f"✍️ {text}", icon="input-keyboard", timeout=2500)
+            else:
+                print("[*] No speech recognized.")
+                self.notifier.notify("WhisperFlow", "❌ No speech heard", icon="dialog-warning", timeout=1500)
+        except Exception as e:
+            print(f"[ERROR] Transcription/paste failed: {e}")
+            self.notifier.notify("WhisperFlow", f"❌ Error: {e}", icon="dialog-error", timeout=2000)
 
     def on_cancel(self):
         with self._lock:
